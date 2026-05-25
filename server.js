@@ -1,8 +1,4 @@
 import express from "express";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { randomUUID } from "crypto";
 
 const DISTRU_API_KEY = process.env.DISTRU_API_KEY;
@@ -39,7 +35,7 @@ const TOOLS = [
   { name: "get_batches", description: "List batches. Each product can have multiple batches tracked separately.", inputSchema: { type: "object", properties: { product_id: { type: "string" }, search: { type: "string" }, first: { type: "number" }, after: { type: "string" } } } },
   { name: "create_batch", description: "Create a new batch under a product.", inputSchema: { type: "object", required: ["product_id", "name"], properties: { product_id: { type: "string" }, name: { type: "string" }, quantity: { type: "number" }, location_id: { type: "string" } } } },
   { name: "get_adjustments", description: "Get stock adjustment history.", inputSchema: { type: "object", properties: { batch_id: { type: "string" }, product_id: { type: "string" }, first: { type: "number" } } } },
-  { name: "insert_stock_adjustment", description: "Adjust inventory on a batch. quantity is a DELTA (positive adds, negative removes). Always confirm with Nick before calling this.", inputSchema: { type: "object", required: ["quantity", "reason", "description"], properties: { batch_id: { type: "string" }, product_id: { type: "string" }, quantity: { type: "number" }, reason: { type: "string", enum: ["waste","stolen","damaged","fire","write-off","expired","lab-testing","revaluation","other"] }, description: { type: "string" }, location_id: { type: "string" }, unit_cost: { type: "number" } } } },
+  { name: "insert_stock_adjustment", description: "Adjust inventory on a batch. quantity is a DELTA (positive adds, negative removes). Always confirm with Nick before calling.", inputSchema: { type: "object", required: ["quantity", "reason", "description"], properties: { batch_id: { type: "string" }, product_id: { type: "string" }, quantity: { type: "number" }, reason: { type: "string", enum: ["waste","stolen","damaged","fire","write-off","expired","lab-testing","revaluation","other"] }, description: { type: "string" }, location_id: { type: "string" }, unit_cost: { type: "number" } } } },
   { name: "get_locations", description: "List all locations in Distru.", inputSchema: { type: "object", properties: {} } },
   { name: "get_contacts", description: "List dispensary contacts and customers.", inputSchema: { type: "object", properties: { search: { type: "string" }, first: { type: "number" }, after: { type: "string" } } } },
   { name: "get_orders", description: "List sales orders.", inputSchema: { type: "object", properties: { status: { type: "string", enum: ["draft","pending","confirmed","invoiced","complete","cancelled"] }, contact_id: { type: "string" }, first: { type: "number" }, after: { type: "string" } } } },
@@ -78,21 +74,22 @@ async function callTool(name, args) {
   }
 }
 
-function buildMcpServer() {
-  const srv = new Server({ name: "distru-mcp", version: "1.0.0" }, { capabilities: { tools: {} } });
-  srv.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
-  srv.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const { name, arguments: args } = req.params;
-    try {
-      const result = await callTool(name, args);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-    } catch (err) {
-      return { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true };
-    }
-  });
-  return srv;
-}
+// ─── OAuth discovery (required by claude.ai) ──────────────────────────────────
+const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+  : `http://localhost:${PORT}`;
 
+const OAUTH_META = {
+  issuer: BASE_URL,
+  authorization_endpoint: `${BASE_URL}/authorize`,
+  token_endpoint: `${BASE_URL}/token`,
+  registration_endpoint: `${BASE_URL}/register`,
+  response_types_supported: ["code"],
+  grant_types_supported: ["authorization_code"],
+  code_challenge_methods_supported: ["S256"],
+};
+
+// ─── Express ──────────────────────────────────────────────────────────────────
 const app = express();
 app.use(express.json());
 app.use((_req, res, next) => {
@@ -113,41 +110,44 @@ function auth(req, res, next) {
 
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "distru-mcp", ts: new Date().toISOString() }));
 
-const sseSessions = {};
-app.get("/sse", auth, async (req, res) => {
-  const mcpSrv = buildMcpServer();
-  const transport = new SSEServerTransport("/messages", res);
-  sseSessions[transport.sessionId] = transport;
-  res.on("close", () => delete sseSessions[transport.sessionId]);
-  await mcpSrv.connect(transport);
+app.get("/.well-known/oauth-authorization-server", (_req, res) => res.json(OAUTH_META));
+app.get("/.well-known/oauth-protected-resource", (_req, res) => res.json({ resource: BASE_URL, authorization_servers: [BASE_URL] }));
+app.post("/register", (_req, res) => res.status(201).json({ client_id: randomUUID(), client_secret: randomUUID(), token_endpoint_auth_method: "none" }));
+app.get("/authorize", (req, res) => {
+  const { redirect_uri, state } = req.query;
+  const code = randomUUID();
+  res.redirect(`${redirect_uri}?code=${code}&state=${state}`);
 });
-app.post("/messages", async (req, res) => {
-  const t = sseSessions[req.query.sessionId];
-  if (!t) return res.status(404).json({ error: "Session not found" });
-  await t.handlePostMessage(req, res);
-});
+app.post("/token", (_req, res) => res.json({ access_token: SERVER_SECRET || "public", token_type: "bearer", expires_in: 86400 }));
 
-const httpSessions = {};
+// ─── MCP at root — direct JSON-RPC handler (bypasses SDK Accept-header issues) ──
 app.head("/", (_req, res) => res.set("MCP-Protocol-Version", "2025-06-18").sendStatus(200));
-app.get("/", (req, res) => {
-  const t = req.headers["mcp-session-id"] && httpSessions[req.headers["mcp-session-id"]];
-  if (t) { t.handleRequest(req, res).catch(() => {}); } else { res.set("Allow", "POST").status(405).send(); }
-});
-app.post("/", async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"];
-  const existing = sessionId && httpSessions[sessionId];
-  if (existing) { await existing.handleRequest(req, res); }
-  else {
-    const newId = randomUUID();
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => newId, onsessioninitialized: (id) => { httpSessions[id] = transport; } });
-    await buildMcpServer().connect(transport);
-    await transport.handleRequest(req, res);
+
+app.post("/", auth, async (req, res) => {
+  const body = req.body;
+  if (!body || !body.method) return res.status(400).json({ jsonrpc: "2.0", error: { code: -32600, message: "Invalid request" }, id: null });
+
+  const id = body.id ?? null;
+  try {
+    if (body.method === "initialize") {
+      return res.json({ jsonrpc: "2.0", id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "distru-mcp", version: "1.0.0" } } });
+    }
+    if (body.method === "notifications/initialized") return res.status(204).send();
+    if (body.method === "tools/list") {
+      return res.json({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
+    }
+    if (body.method === "tools/call") {
+      const { name, arguments: args } = body.params;
+      const result = await callTool(name, args);
+      return res.json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] } });
+    }
+    if (body.method === "ping") return res.json({ jsonrpc: "2.0", id, result: {} });
+    return res.status(405).json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } });
+  } catch (err) {
+    return res.json({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: `Error: ${err.message}` }], isError: true } });
   }
 });
-app.delete("/", (req, res) => {
-  const sessionId = req.headers["mcp-session-id"];
-  if (sessionId && httpSessions[sessionId]) { httpSessions[sessionId].close().catch(() => {}); delete httpSessions[sessionId]; res.sendStatus(200); }
-  else { res.sendStatus(404); }
-});
+
+app.get("/", (_req, res) => res.set("Allow", "POST").status(405).send());
 
 app.listen(PORT, () => console.log(`Distru MCP ready on :${PORT}`));
