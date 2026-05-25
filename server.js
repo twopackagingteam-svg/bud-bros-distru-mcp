@@ -76,6 +76,133 @@ async function callTool(name, args) {
   }
 }
 
+async function handleJsonRpc(body) {
+  const { method, params, id } = body;
+  try {
+    if (method === "initialize") {
+      return {
+        jsonrpc: "2.0", id,
+        result: {
+          protocolVersion: "2024-11-05",
+          capabilities: { tools: {} },
+          serverInfo: { name: "distru-mcp", version: "1.0.0" },
+        },
+      };
+    }
+    if (method === "tools/list") {
+      return { jsonrpc: "2.0", id, result: { tools: TOOLS } };
+    }
+    if (method === "tools/call") {
+      const { name, arguments: args } = params;
+      const result = await callTool(name, args);
+      return {
+        jsonrpc: "2.0", id,
+        result: { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] },
+      };
+    }
+    if (method === "notifications/initialized" || method === "ping") {
+      return id != null ? { jsonrpc: "2.0", id, result: {} } : null;
+    }
+    return { jsonrpc: "2.0", id, error: { code: -32601, message: `Method not found: ${method}` } };
+  } catch (err) {
+    return { jsonrpc: "2.0", id, error: { code: -32603, message: err.message } };
+  }
+}
+
+const app = express();
+app.use(express.json());
+app.use((_req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, Mcp-Session-Id, MCP-Protocol-Version, Accept");
+  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, HEAD, OPTIONS");
+  res.header("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version, WWW-Authenticate");
+  if (_req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
+
+function auth(req, res, next) {
+  if (!SERVER_SECRET) return next();
+  const token = req.query.key || req.headers["x-api-key"] || (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  if (token !== SERVER_SECRET) return res.status(401).json({ error: "Unauthorized" });
+  next();
+}
+
+// Health check
+app.get("/health", (_req, res) =>
+  res.json({ status: "ok", service: "distru-mcp", ts: new Date().toISOString() })
+);
+
+// OAuth 2.0 Protected Resource Metadata (RFC 9728)
+app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+  res.json({
+    resource: BASE_URL,
+    authorization_servers: [BASE_URL],
+    bearer_methods_supported: ["header", "query"],
+  });
+});
+
+// OAuth 2.0 Authorization Server Metadata (RFC 8414)
+app.get("/.well-known/oauth-authorization-server", (_req, res) => {
+  res.json({
+    issuer: BASE_URL,
+    authorization_endpoint: `${BASE_URL}/authorize`,
+    token_endpoint: `${BASE_URL}/token`,
+    registration_endpoint: `${BASE_URL}/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "client_credentials"],
+    token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
+    scopes_supported: ["mcp"],
+    code_challenge_methods_supported: ["S256"],
+  });
+});
+
+// OAuth Dynamic Client Registration (RFC 7591)
+app.post("/register", (req, res) => {
+  const clientId = randomUUID();
+  res.status(201).json({
+    client_id: clientId,
+    client_secret: "none",
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    client_secret_expires_at: 0,
+    redirect_uris: req.body?.redirect_uris || [],
+    grant_types: ["authorization_code", "client_credentials"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  });
+});
+
+// OAuth Authorization endpoint
+app.get("/authorize", (req, res) => {
+  const { redirect_uri, state } = req.query;
+  if (!redirect_uri) return res.status(400).send("Missing redirect_uri");
+  const code = randomUUID();
+  const url = new URL(redirect_uri);
+  url.searchParams.set("code", code);
+  if (state) url.searchParams.set("state", state);
+  res.redirect(302, url.toString());
+});
+
+// OAuth Token endpoint
+app.post("/token", (req, res) => {
+  res.json({
+    access_token: SERVER_SECRET || randomUUID(),
+    token_type: "bearer",
+    expires_in: 86400,
+    scope: "mcp",
+  });
+});
+
+// SSE transport (legacy)
+const sseSessions = {};
+
+app.get("/sse", auth, async (req, res) => {
+  const mcpSrv = buildMcpServer();
+  const transport = new SSEServerTransport("/messages", res);
+  sseSessions[transport.sessionId] = transport;
+  res.on("close", () => delete sseSessions[transport.sessionId]);
+  await mcpSrv.connect(transport);
+});
+
 function buildMcpServer() {
   const srv = new Server(
     { name: "distru-mcp", version: "1.0.0" },
@@ -94,148 +221,82 @@ function buildMcpServer() {
   return srv;
 }
 
-const app = express();
-app.use(express.json());
-app.use((_req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, Mcp-Session-Id, MCP-Protocol-Version");
-  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, HEAD, OPTIONS");
-  res.header("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version, WWW-Authenticate");
-  if (_req.method === "OPTIONS") return res.sendStatus(200);
-  next();
-});
-
-function auth(req, res, next) {
-  if (!SERVER_SECRET) return next();
-  const token = req.query.key || req.headers["x-api-key"] || (req.headers.authorization || "").replace("Bearer ", "");
-  if (token !== SERVER_SECRET) return res.status(401).json({ error: "Unauthorized" });
-  next();
-}
-
-// Health check
-app.get("/health", (_req, res) =>
-  res.json({ status: "ok", service: "distru-mcp", ts: new Date().toISOString() })
-);
-
-// OAuth 2.0 Protected Resource Metadata (RFC 9728)
-// claude.ai checks this first to discover the authorization server
-app.get("/.well-known/oauth-protected-resource", (_req, res) => {
-  res.json({
-    resource: BASE_URL,
-    authorization_servers: [BASE_URL],
-    bearer_methods_supported: ["header", "query"],
-    resource_signing_alg_values_supported: [],
-  });
-});
-
-// OAuth 2.0 Authorization Server Metadata (RFC 8414)
-// claude.ai uses this to find the token endpoint, etc.
-app.get("/.well-known/oauth-authorization-server", (_req, res) => {
-  res.json({
-    issuer: BASE_URL,
-    authorization_endpoint: `${BASE_URL}/authorize`,
-    token_endpoint: `${BASE_URL}/token`,
-    registration_endpoint: `${BASE_URL}/register`,
-    response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code", "client_credentials"],
-    token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
-    scopes_supported: ["mcp"],
-  });
-});
-
-// OAuth Dynamic Client Registration (RFC 7591)
-// claude.ai registers itself as a client
-app.post("/register", (req, res) => {
-  const clientId = randomUUID();
-  res.status(201).json({
-    client_id: clientId,
-    client_secret: SERVER_SECRET || "none",
-    client_id_issued_at: Math.floor(Date.now() / 1000),
-    client_secret_expires_at: 0,
-    redirect_uris: req.body?.redirect_uris || [],
-    grant_types: ["authorization_code", "client_credentials"],
-    response_types: ["code"],
-    token_endpoint_auth_method: "none",
-  });
-});
-
-// OAuth Authorization endpoint — redirect with code immediately (no real auth needed)
-app.get("/authorize", (req, res) => {
-  const { redirect_uri, state, code_challenge } = req.query;
-  if (!redirect_uri) return res.status(400).send("Missing redirect_uri");
-  const code = randomUUID();
-  const url = new URL(redirect_uri);
-  url.searchParams.set("code", code);
-  if (state) url.searchParams.set("state", state);
-  res.redirect(302, url.toString());
-});
-
-// OAuth Token endpoint — issue an access token
-app.post("/token", (req, res) => {
-  res.json({
-    access_token: SERVER_SECRET || "public",
-    token_type: "bearer",
-    expires_in: 86400,
-    scope: "mcp",
-  });
-});
-
-// SSE transport (legacy)
-const sseSessions = {};
-
-app.get("/sse", auth, async (req, res) => {
-  const mcpSrv = buildMcpServer();
-  const transport = new SSEServerTransport("/messages", res);
-  sseSessions[transport.sessionId] = transport;
-  res.on("close", () => delete sseSessions[transport.sessionId]);
-  await mcpSrv.connect(transport);
-});
-
 app.post("/messages", async (req, res) => {
   const t = sseSessions[req.query.sessionId];
   if (!t) return res.status(404).json({ error: "Session not found — reconnect to /sse" });
   await t.handlePostMessage(req, res);
 });
 
-// StreamableHTTP transport at root /
-const httpSessions = {};
+// StreamableHTTP — handle MCP at root / with manual JSON-RPC
+// The MCP SDK's StreamableHTTPServerTransport checks Accept headers strictly (needs both
+// application/json and text/event-stream). Instead we handle JSON-RPC directly.
+const sessions = {};
 
 app.head("/", (_req, res) => {
-  res.set("MCP-Protocol-Version", "2025-06-18").sendStatus(200);
+  res
+    .set("MCP-Protocol-Version", "2024-11-05")
+    .set("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version")
+    .sendStatus(200);
 });
 
 app.get("/", (req, res) => {
   const sessionId = req.headers["mcp-session-id"];
-  const t = sessionId && httpSessions[sessionId];
-  if (t) {
-    t.handleRequest(req, res).catch(() => {});
+  if (sessionId && sessions[sessionId]) {
+    // SSE stream for server-sent notifications
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "Mcp-Session-Id": sessionId,
+    });
+    res.flushHeaders();
+    sessions[sessionId].res = res;
+    req.on("close", () => {
+      if (sessions[sessionId]) sessions[sessionId].res = null;
+    });
   } else {
-    res.set("Allow", "POST").status(405).send();
+    res.set("Allow", "POST").status(405).json({ error: "Use POST to initialize" });
   }
 });
 
 app.post("/", async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"];
-  const existing = sessionId && httpSessions[sessionId];
-  if (existing) {
-    await existing.handleRequest(req, res);
+  console.log("POST / headers:", JSON.stringify(req.headers));
+  console.log("POST / body:", JSON.stringify(req.body));
+
+  const sessionId = req.headers["mcp-session-id"] || randomUUID();
+
+  // Handle batch or single request
+  const requests = Array.isArray(req.body) ? req.body : [req.body];
+  const responses = [];
+
+  for (const rpc of requests) {
+    if (!rpc || typeof rpc !== "object") continue;
+    const resp = await handleJsonRpc(rpc);
+    if (resp) responses.push(resp);
+
+    // On initialize, set up session
+    if (rpc.method === "initialize") {
+      sessions[sessionId] = { res: null };
+    }
+  }
+
+  res.set("Mcp-Session-Id", sessionId);
+  res.set("MCP-Protocol-Version", "2024-11-05");
+
+  if (responses.length === 0) {
+    res.sendStatus(204);
+  } else if (responses.length === 1) {
+    res.json(responses[0]);
   } else {
-    const newId = randomUUID();
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => newId,
-      onsessioninitialized: (id) => { httpSessions[id] = transport; },
-    });
-    const mcpSrv = buildMcpServer();
-    await mcpSrv.connect(transport);
-    await transport.handleRequest(req, res);
+    res.json(responses);
   }
 });
 
 app.delete("/", (req, res) => {
   const sessionId = req.headers["mcp-session-id"];
-  if (sessionId && httpSessions[sessionId]) {
-    httpSessions[sessionId].close().catch(() => {});
-    delete httpSessions[sessionId];
+  if (sessionId && sessions[sessionId]) {
+    if (sessions[sessionId].res) sessions[sessionId].res.end();
+    delete sessions[sessionId];
     res.sendStatus(200);
   } else {
     res.sendStatus(404);
