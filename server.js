@@ -1,7 +1,9 @@
 import express from "express";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { randomUUID } from "crypto";
 
 const DISTRU_API_KEY = process.env.DISTRU_API_KEY;
 const SERVER_SECRET  = process.env.SERVER_SECRET;
@@ -93,8 +95,8 @@ const app = express();
 app.use(express.json());
 app.use((_req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Content-Type, x-api-key");
-  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, x-api-key, mcp-session-id");
+  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   if (_req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
@@ -110,18 +112,61 @@ app.get("/health", (_req, res) =>
   res.json({ status: "ok", service: "distru-mcp", ts: new Date().toISOString() })
 );
 
-const sessions = {};
+// Streamable HTTP transport (for claude.ai remote MCP)
+const streamableSessions = new Map();
+
+app.post("/mcp", auth, async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+  let transport;
+  if (sessionId && streamableSessions.has(sessionId)) {
+    transport = streamableSessions.get(sessionId);
+  } else {
+    const srv = buildMcpServer();
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (id) => { streamableSessions.set(id, transport); }
+    });
+    transport.onclose = () => {
+      if (transport.sessionId) streamableSessions.delete(transport.sessionId);
+    };
+    await srv.connect(transport);
+  }
+  await transport.handleRequest(req, res, req.body);
+});
+
+app.get("/mcp", auth, async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+  if (!sessionId || !streamableSessions.has(sessionId)) {
+    return res.status(400).json({ error: "No session. POST to /mcp first." });
+  }
+  const transport = streamableSessions.get(sessionId);
+  await transport.handleRequest(req, res);
+});
+
+app.delete("/mcp", auth, async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+  if (sessionId && streamableSessions.has(sessionId)) {
+    const transport = streamableSessions.get(sessionId);
+    await transport.handleRequest(req, res);
+    streamableSessions.delete(sessionId);
+  } else {
+    res.status(200).json({ ok: true });
+  }
+});
+
+// SSE transport (legacy)
+const sseSessions = {};
 
 app.get("/sse", auth, async (req, res) => {
   const mcpSrv = buildMcpServer();
   const transport = new SSEServerTransport("/messages", res);
-  sessions[transport.sessionId] = transport;
-  res.on("close", () => delete sessions[transport.sessionId]);
+  sseSessions[transport.sessionId] = transport;
+  res.on("close", () => delete sseSessions[transport.sessionId]);
   await mcpSrv.connect(transport);
 });
 
 app.post("/messages", auth, async (req, res) => {
-  const t = sessions[req.query.sessionId];
+  const t = sseSessions[req.query.sessionId];
   if (!t) return res.status(404).json({ error: "Session not found — reconnect to /sse" });
   await t.handlePostMessage(req, res);
 });
