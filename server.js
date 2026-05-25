@@ -35,7 +35,7 @@ const TOOLS = [
   { name: "get_batches", description: "List batches. Each product can have multiple batches tracked separately.", inputSchema: { type: "object", properties: { product_id: { type: "string" }, search: { type: "string" }, first: { type: "number" }, after: { type: "string" } } } },
   { name: "create_batch", description: "Create a new batch under a product.", inputSchema: { type: "object", required: ["product_id", "name"], properties: { product_id: { type: "string" }, name: { type: "string" }, quantity: { type: "number" }, location_id: { type: "string" } } } },
   { name: "get_adjustments", description: "Get stock adjustment history.", inputSchema: { type: "object", properties: { batch_id: { type: "string" }, product_id: { type: "string" }, first: { type: "number" } } } },
-  { name: "insert_stock_adjustment", description: "Adjust inventory on a batch. quantity is a DELTA (positive adds, negative removes). Always confirm with Nick before calling.", inputSchema: { type: "object", required: ["quantity", "reason", "description"], properties: { batch_id: { type: "string" }, product_id: { type: "string" }, quantity: { type: "number" }, reason: { type: "string", enum: ["waste","stolen","damaged","fire","write-off","expired","lab-testing","revaluation","other"] }, description: { type: "string" }, location_id: { type: "string" }, unit_cost: { type: "number" } } } },
+  { name: "insert_stock_adjustment", description: "Adjust inventory on a batch. quantity is a DELTA (positive adds, negative removes). Always confirm with Nick before calling.", inputSchema: { type: "object", required: ["quantity", "reason", "description"], properties: { batch_id: { type: "string" }, product_id: { type: "string" }, quantity: { type: "number" }, reason: { type: "string", enum: ["waste","stolen","damaged","fire","write-off","expired","lab-testing","revaluation","other"] }, description: { type: "string" }, location_id: { type: "string" }, unit_cost: { type: "number" }, completion_datetime: { type: "string" } } } },
   { name: "get_locations", description: "List all locations in Distru.", inputSchema: { type: "object", properties: {} } },
   { name: "get_contacts", description: "List dispensary contacts and customers.", inputSchema: { type: "object", properties: { search: { type: "string" }, first: { type: "number" }, after: { type: "string" } } } },
   { name: "get_orders", description: "List sales orders.", inputSchema: { type: "object", properties: { status: { type: "string", enum: ["draft","pending","confirmed","invoiced","complete","cancelled"] }, contact_id: { type: "string" }, first: { type: "number" }, after: { type: "string" } } } },
@@ -62,7 +62,14 @@ async function callTool(name, args) {
     case "get_batches":             return await distru(`/batches${qs({ first: 40, ...a })}`);
     case "create_batch":            return await distru("/batches", "POST", a);
     case "get_adjustments":         return await distru(`/adjustments${qs({ first: 20, ...a })}`);
-    case "insert_stock_adjustment": return await distru("/adjustments", "POST", a);
+    case "insert_stock_adjustment": {
+      const body = { ...a };
+      if (!body.completion_datetime) {
+        const now = new Date();
+        body.completion_datetime = now.toISOString().replace(/\.\d{3}Z$/, '.000000');
+      }
+      return await distru("/adjustments", "POST", body);
+    }
     case "get_locations":           return await distru("/locations");
     case "get_contacts":            return await distru(`/contacts${qs({ first: 40, ...a })}`);
     case "get_orders":              return await distru(`/orders${qs({ first: 20, ...a })}`);
