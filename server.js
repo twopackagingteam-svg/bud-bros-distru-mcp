@@ -38,19 +38,19 @@ function qs(obj) {
 }
 
 const TOOLS = [
-  { name: "get_inventory", description: "Get current inventory levels for all products and batches. Returns active, available, and reserved quantities per batch per location.", inputSchema: { type: "object", properties: { product_id: { type: "string", description: "Filter by product ID" }, location_id: { type: "string", description: "Filter by location ID" }, search: { type: "string", description: "Search by product name" } } } },
-  { name: "get_products", description: "List all products — SKUs, categories, unit types, pricing, case sizes.", inputSchema: { type: "object", properties: { search: { type: "string", description: "Search by product name" }, is_active: { type: "boolean", description: "Filter active/inactive" }, first: { type: "number", description: "Page size (default 40)" }, after: { type: "string", description: "Pagination cursor" } } } },
-  { name: "get_batches", description: "List batches. Each product can have unlimited batches, each tracked separately.", inputSchema: { type: "object", properties: { product_id: { type: "string", description: "Filter by product ID" }, search: { type: "string", description: "Search by batch name" }, first: { type: "number", description: "Page size (default 40)" }, after: { type: "string", description: "Pagination cursor" } } } },
-  { name: "create_batch", description: "Create a new batch under a product.", inputSchema: { type: "object", required: ["product_id", "name"], properties: { product_id: { type: "string", description: "Product ID" }, name: { type: "string", description: "Batch name/number e.g. 122825" }, quantity: { type: "number", description: "Initial quantity" }, location_id: { type: "string", description: "Location ID" } } } },
-  { name: "get_adjustments", description: "Get stock adjustment history.", inputSchema: { type: "object", properties: { batch_id: { type: "string", description: "Filter by batch ID" }, product_id: { type: "string", description: "Filter by product ID" }, first: { type: "number", description: "Page size (default 20)" } } } },
-  { name: "insert_stock_adjustment", description: "Adjust inventory on a batch. Positive quantity adds stock, negative removes. ALWAYS confirm with Nick in chat before calling this.", inputSchema: { type: "object", required: ["batch_id", "quantity", "reason"], properties: { batch_id: { type: "string", description: "Batch ID to adjust" }, quantity: { type: "number", description: "Amount to add (positive) or remove (negative)" }, reason: { type: "string", enum: ["physical_count","waste","sample","theft","damage","return","other"] }, note: { type: "string", description: "Audit trail note" }, location_id: { type: "string", description: "Location ID" } } } },
+  { name: "get_inventory", description: "Get current inventory levels for all products and batches. Returns active, available, and reserved quantities per batch per location.", inputSchema: { type: "object", properties: { product_id: { type: "string" }, location_id: { type: "string" }, search: { type: "string" } } } },
+  { name: "get_products", description: "List all products — SKUs, categories, unit types, pricing, case sizes.", inputSchema: { type: "object", properties: { search: { type: "string" }, is_active: { type: "boolean" }, first: { type: "number" }, after: { type: "string" } } } },
+  { name: "get_batches", description: "List batches. Each product can have unlimited batches, each tracked separately.", inputSchema: { type: "object", properties: { product_id: { type: "string" }, search: { type: "string" }, first: { type: "number" }, after: { type: "string" } } } },
+  { name: "create_batch", description: "Create a new batch under a product.", inputSchema: { type: "object", required: ["product_id", "name"], properties: { product_id: { type: "string" }, name: { type: "string" }, quantity: { type: "number" }, location_id: { type: "string" } } } },
+  { name: "get_adjustments", description: "Get stock adjustment history.", inputSchema: { type: "object", properties: { batch_id: { type: "string" }, product_id: { type: "string" }, first: { type: "number" } } } },
+  { name: "insert_stock_adjustment", description: "Adjust inventory on a batch. Positive quantity adds stock, negative removes. ALWAYS confirm with Nick in chat before calling this.", inputSchema: { type: "object", required: ["batch_id", "quantity", "reason"], properties: { batch_id: { type: "string" }, quantity: { type: "number" }, reason: { type: "string", enum: ["physical_count","waste","sample","theft","damage","return","other"] }, note: { type: "string" }, location_id: { type: "string" } } } },
   { name: "get_locations", description: "List all locations in Distru.", inputSchema: { type: "object", properties: {} } },
-  { name: "get_contacts", description: "List dispensary contacts and customers.", inputSchema: { type: "object", properties: { search: { type: "string", description: "Search by name" }, first: { type: "number", description: "Page size (default 40)" }, after: { type: "string", description: "Pagination cursor" } } } },
-  { name: "get_orders", description: "List sales orders.", inputSchema: { type: "object", properties: { status: { type: "string", enum: ["draft","pending","confirmed","invoiced","complete","cancelled"] }, contact_id: { type: "string", description: "Filter by dispensary contact ID" }, first: { type: "number", description: "Page size (default 20)" }, after: { type: "string", description: "Pagination cursor" } } } },
-  { name: "get_order", description: "Get one order with full line item details.", inputSchema: { type: "object", required: ["order_id"], properties: { order_id: { type: "string", description: "Order ID" } } } },
-  { name: "get_strains", description: "List all strains configured in Distru.", inputSchema: { type: "object", properties: { search: { type: "string", description: "Search by strain name" } } } },
-  { name: "get_packages", description: "List Metrc packages (compliance-tracked inventory).", inputSchema: { type: "object", properties: { product_id: { type: "string", description: "Filter by product ID" }, first: { type: "number", description: "Page size (default 20)" } } } },
-  { name: "upsert_product", description: "Create or update a product. Pass id to update existing.", inputSchema: { type: "object", required: ["name"], properties: { id: { type: "string", description: "Product ID (omit to create new)" }, name: { type: "string", description: "Product name" }, sku: { type: "string", description: "SKU code" }, unit_price: { type: "number", description: "Wholesale price per unit" }, units_per_case: { type: "number", description: "Units per case" }, is_active: { type: "boolean", description: "Active status" } } } }
+  { name: "get_contacts", description: "List dispensary contacts and customers.", inputSchema: { type: "object", properties: { search: { type: "string" }, first: { type: "number" }, after: { type: "string" } } } },
+  { name: "get_orders", description: "List sales orders.", inputSchema: { type: "object", properties: { status: { type: "string", enum: ["draft","pending","confirmed","invoiced","complete","cancelled"] }, contact_id: { type: "string" }, first: { type: "number" }, after: { type: "string" } } } },
+  { name: "get_order", description: "Get one order with full line item details.", inputSchema: { type: "object", required: ["order_id"], properties: { order_id: { type: "string" } } } },
+  { name: "get_strains", description: "List all strains configured in Distru.", inputSchema: { type: "object", properties: { search: { type: "string" } } } },
+  { name: "get_packages", description: "List Metrc packages.", inputSchema: { type: "object", properties: { product_id: { type: "string" }, first: { type: "number" } } } },
+  { name: "upsert_product", description: "Create or update a product.", inputSchema: { type: "object", required: ["name"], properties: { id: { type: "string" }, name: { type: "string" }, sku: { type: "string" }, unit_price: { type: "number" }, units_per_case: { type: "number" }, is_active: { type: "boolean" } } } }
 ];
 
 async function callTool(name, args) {
@@ -95,15 +95,16 @@ const app = express();
 app.use(express.json());
 app.use((_req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Content-Type, x-api-key, mcp-session-id");
-  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, Mcp-Session-Id");
+  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, HEAD, OPTIONS");
+  res.header("Access-Control-Expose-Headers", "Mcp-Session-Id");
   if (_req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
 function auth(req, res, next) {
   if (!SERVER_SECRET) return next();
-  const token = req.query.key || req.headers["x-api-key"];
+  const token = req.query.key || req.headers["x-api-key"] || (req.headers.authorization || "").replace("Bearer ", "");
   if (token !== SERVER_SECRET) return res.status(401).json({ error: "Unauthorized" });
   next();
 }
@@ -112,49 +113,6 @@ app.get("/health", (_req, res) =>
   res.json({ status: "ok", service: "distru-mcp", ts: new Date().toISOString() })
 );
 
-// Streamable HTTP transport (for claude.ai remote MCP)
-const streamableSessions = new Map();
-
-app.post("/mcp", auth, async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"];
-  let transport;
-  if (sessionId && streamableSessions.has(sessionId)) {
-    transport = streamableSessions.get(sessionId);
-  } else {
-    const srv = buildMcpServer();
-    transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (id) => { streamableSessions.set(id, transport); }
-    });
-    transport.onclose = () => {
-      if (transport.sessionId) streamableSessions.delete(transport.sessionId);
-    };
-    await srv.connect(transport);
-  }
-  await transport.handleRequest(req, res, req.body);
-});
-
-app.get("/mcp", auth, async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"];
-  if (!sessionId || !streamableSessions.has(sessionId)) {
-    return res.status(400).json({ error: "No session. POST to /mcp first." });
-  }
-  const transport = streamableSessions.get(sessionId);
-  await transport.handleRequest(req, res);
-});
-
-app.delete("/mcp", auth, async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"];
-  if (sessionId && streamableSessions.has(sessionId)) {
-    const transport = streamableSessions.get(sessionId);
-    await transport.handleRequest(req, res);
-    streamableSessions.delete(sessionId);
-  } else {
-    res.status(200).json({ ok: true });
-  }
-});
-
-// SSE transport (legacy)
 const sseSessions = {};
 
 app.get("/sse", auth, async (req, res) => {
@@ -165,10 +123,54 @@ app.get("/sse", auth, async (req, res) => {
   await mcpSrv.connect(transport);
 });
 
-app.post("/messages", auth, async (req, res) => {
+app.post("/messages", async (req, res) => {
   const t = sseSessions[req.query.sessionId];
   if (!t) return res.status(404).json({ error: "Session not found — reconnect to /sse" });
   await t.handlePostMessage(req, res);
+});
+
+const httpSessions = {};
+
+app.head("/", (_req, res) => {
+  res.set("MCP-Protocol-Version", "2025-06-18").sendStatus(200);
+});
+
+app.get("/", (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+  const t = sessionId && httpSessions[sessionId];
+  if (t) {
+    t.handleRequest(req, res).catch(() => {});
+  } else {
+    res.set("Allow", "POST").status(405).send();
+  }
+});
+
+app.post("/", async (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+  const existing = sessionId && httpSessions[sessionId];
+  if (existing) {
+    await existing.handleRequest(req, res);
+  } else {
+    const newId = randomUUID();
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => newId,
+      onsessioninitialized: (id) => { httpSessions[id] = transport; },
+    });
+    const mcpSrv = buildMcpServer();
+    await mcpSrv.connect(transport);
+    await transport.handleRequest(req, res);
+  }
+});
+
+app.delete("/", (req, res) => {
+  const sessionId = req.headers["mcp-session-id"];
+  if (sessionId && httpSessions[sessionId]) {
+    httpSessions[sessionId].close().catch(() => {});
+    delete httpSessions[sessionId];
+    res.sendStatus(200);
+  } else {
+    res.sendStatus(404);
+  }
 });
 
 app.listen(PORT, () => console.log(`Distru MCP ready on :${PORT}`));
