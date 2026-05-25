@@ -8,6 +8,9 @@ import { randomUUID } from "crypto";
 const DISTRU_API_KEY = process.env.DISTRU_API_KEY;
 const SERVER_SECRET  = process.env.SERVER_SECRET;
 const PORT           = process.env.PORT || 3000;
+const BASE_URL       = process.env.RAILWAY_PUBLIC_DOMAIN
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+  : `http://localhost:${PORT}`;
 
 if (!DISTRU_API_KEY) {
   console.error("FATAL: DISTRU_API_KEY is not set.");
@@ -95,9 +98,9 @@ const app = express();
 app.use(express.json());
 app.use((_req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, Mcp-Session-Id");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, Mcp-Session-Id, MCP-Protocol-Version");
   res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, HEAD, OPTIONS");
-  res.header("Access-Control-Expose-Headers", "Mcp-Session-Id");
+  res.header("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version, WWW-Authenticate");
   if (_req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
@@ -109,10 +112,75 @@ function auth(req, res, next) {
   next();
 }
 
+// Health check
 app.get("/health", (_req, res) =>
   res.json({ status: "ok", service: "distru-mcp", ts: new Date().toISOString() })
 );
 
+// OAuth 2.0 Protected Resource Metadata (RFC 9728)
+// claude.ai checks this first to discover the authorization server
+app.get("/.well-known/oauth-protected-resource", (_req, res) => {
+  res.json({
+    resource: BASE_URL,
+    authorization_servers: [BASE_URL],
+    bearer_methods_supported: ["header", "query"],
+    resource_signing_alg_values_supported: [],
+  });
+});
+
+// OAuth 2.0 Authorization Server Metadata (RFC 8414)
+// claude.ai uses this to find the token endpoint, etc.
+app.get("/.well-known/oauth-authorization-server", (_req, res) => {
+  res.json({
+    issuer: BASE_URL,
+    authorization_endpoint: `${BASE_URL}/authorize`,
+    token_endpoint: `${BASE_URL}/token`,
+    registration_endpoint: `${BASE_URL}/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "client_credentials"],
+    token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
+    scopes_supported: ["mcp"],
+  });
+});
+
+// OAuth Dynamic Client Registration (RFC 7591)
+// claude.ai registers itself as a client
+app.post("/register", (req, res) => {
+  const clientId = randomUUID();
+  res.status(201).json({
+    client_id: clientId,
+    client_secret: SERVER_SECRET || "none",
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    client_secret_expires_at: 0,
+    redirect_uris: req.body?.redirect_uris || [],
+    grant_types: ["authorization_code", "client_credentials"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  });
+});
+
+// OAuth Authorization endpoint — redirect with code immediately (no real auth needed)
+app.get("/authorize", (req, res) => {
+  const { redirect_uri, state, code_challenge } = req.query;
+  if (!redirect_uri) return res.status(400).send("Missing redirect_uri");
+  const code = randomUUID();
+  const url = new URL(redirect_uri);
+  url.searchParams.set("code", code);
+  if (state) url.searchParams.set("state", state);
+  res.redirect(302, url.toString());
+});
+
+// OAuth Token endpoint — issue an access token
+app.post("/token", (req, res) => {
+  res.json({
+    access_token: SERVER_SECRET || "public",
+    token_type: "bearer",
+    expires_in: 86400,
+    scope: "mcp",
+  });
+});
+
+// SSE transport (legacy)
 const sseSessions = {};
 
 app.get("/sse", auth, async (req, res) => {
@@ -129,6 +197,7 @@ app.post("/messages", async (req, res) => {
   await t.handlePostMessage(req, res);
 });
 
+// StreamableHTTP transport at root /
 const httpSessions = {};
 
 app.head("/", (_req, res) => {
