@@ -59,7 +59,7 @@ const TOOLS = [
 async function callTool(name, args) {
   const a = args || {};
   switch (name) {
-    case "get_inventory":           return await distru(`/inventory${qs(a)}`);
+    case "get_inventory":           return await distru(`/inventory${qs({ grouping: "batch", first: 100, ...a })}`);
     case "get_products":            return await distru(`/products${qs({ first: 40, ...a })}`);
     case "get_batches":             return await distru(`/batches${qs({ first: 40, ...a })}`);
     case "create_batch":            return await distru("/batches", "POST", a);
